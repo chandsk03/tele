@@ -24,30 +24,13 @@
             margin: 0 auto;
         }
 
-        .room-card {
-            background: var(--tg-theme-secondary-bg-color, #f3f4f6);
-            border-radius: 12px;
-            padding: 16px;
-            margin-bottom: 12px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }
-
-        button {
-            background: var(--button-color);
-            color: var(--button-text-color);
-            border: none;
-            padding: 10px 20px;
-            border-radius: 8px;
-            margin: 4px;
-            cursor: pointer;
-        }
-
         .modal {
+            display: none;
             position: fixed;
             top: 50%;
             left: 50%;
             transform: translate(-50%, -50%);
-            background: var(--bg-color);
+            background: var(--tg-theme-secondary-bg-color);
             padding: 20px;
             border-radius: 12px;
             box-shadow: 0 4px 12px rgba(0,0,0,0.15);
@@ -61,7 +44,7 @@
         <button onclick="showCreateModal()">Create New Room</button>
     </div>
 
-    <div id="createModal" class="modal" style="display: none;">
+    <div id="createModal" class="modal">
         <input type="text" id="roomName" placeholder="Room name">
         <button onclick="createRoom()">Create</button>
         <button onclick="hideCreateModal()">Cancel</button>
@@ -71,9 +54,14 @@
         const tg = Telegram.WebApp;
         let currentUser = null;
 
-        // Initialize Web App
-        tg.expand();
-        tg.ready();
+        // Modal functions
+        function showCreateModal() {
+            document.getElementById('createModal').style.display = 'block';
+        }
+
+        function hideCreateModal() {
+            document.getElementById('createModal').style.display = 'none';
+        }
 
         // Authentication
         async function authenticate() {
@@ -84,82 +72,73 @@
                         'Content-Type': 'application/json',
                         'X-Telegram-Init-Data': tg.initData
                     },
-                    body: JSON.stringify(tg.initDataUnsafe.user)
+                    body: JSON.stringify({
+                        user_id: tg.initDataUnsafe.user.id,
+                        first_name: tg.initDataUnsafe.user.first_name,
+                        last_name: tg.initDataUnsafe.user.last_name || ''
+                    })
                 });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
                 
                 currentUser = await response.json();
                 loadRooms();
             } catch (error) {
                 console.error('Authentication failed:', error);
+                tg.showAlert(error.message);
             }
         }
 
-        // Room Management
+        // Room management functions
         async function loadRooms() {
             try {
                 const response = await fetch(`/rooms?user_id=${currentUser.user_id}`, {
                     headers: { 'X-Telegram-Init-Data': tg.initData }
                 });
+                
+                if (!response.ok) throw new Error('Failed to load rooms');
+                
                 const rooms = await response.json();
                 renderRooms(rooms);
             } catch (error) {
                 console.error('Failed to load rooms:', error);
+                tg.showAlert('Failed to load rooms');
             }
         }
 
-        function renderRooms(rooms) {
-            const container = document.getElementById('roomsList');
-            container.innerHTML = rooms.map(room => `
-                <div class="room-card">
-                    <h3>${room.room_name}</h3>
-                    <p>Members: ${room.members.length}</p>
-                    ${room.created_by === currentUser.user_id 
-                        ? `<button onclick="deleteRoom('${room.room_id}')">Delete</button>` 
-                        : `<button onclick="exitRoom('${room.room_id}')">Exit</button>`}
-                    <button onclick="shareRoom('${room.room_id}')">Share</button>
-                </div>
-            `).join('');
+        async function createRoom() {
+            const roomName = document.getElementById('roomName').value;
+            try {
+                const response = await fetch('/rooms', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Telegram-Init-Data': tg.initData
+                    },
+                    body: JSON.stringify({
+                        room_name: roomName,
+                        user_id: currentUser.user_id
+                    })
+                });
+
+                if (!response.ok) throw new Error('Failed to create room');
+                
+                const result = await response.json();
+                if (result.success) {
+                    loadRooms();
+                    hideCreateModal();
+                }
+            } catch (error) {
+                console.error('Failed to create room:', error);
+                tg.showAlert('Failed to create room');
+            }
         }
 
-        // Example create room function
-async function createRoom() {
-  try {
-    const response = await fetch('/rooms', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Telegram-Init-Data': Telegram.WebApp.initData
-      },
-      body: JSON.stringify({
-        room_name: 'My New Room',
-        user_id: Telegram.WebApp.initDataUnsafe.user.id
-      })
-    });
-    
-    const result = await response.json();
-    if (result.success) {
-      // Update UI with new room
-    }
-  } catch (error) {
-    console.error('Create room failed:', error);
-  }
-}
-
-        // Share Room
-        function shareRoom(roomId) {
-            const inviteLink = `${window.location.origin}/join/${roomId}`;
-            tg.showPopup({
-                title: 'Invite Friends',
-                message: `Share this link: ${inviteLink}`,
-                buttons: [{
-                    type: 'default',
-                    text: 'Copy Link',
-                    callback: () => navigator.clipboard.writeText(inviteLink)
-                }]
-            });
-        }
-
-        // Initialize App
+        // Initialize app
+        tg.expand();
+        tg.ready();
         authenticate();
     </script>
 </body>
