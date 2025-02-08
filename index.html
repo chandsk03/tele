@@ -127,13 +127,13 @@
         // Authentication
     async function authenticate() {
         try {
-            const response = await fetch('/auth', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'X-Telegram-Init-Data': tg.initData
-                }
-            });
+            const response = await fetch('/api/auth', { // Changed to /api/auth
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+    'X-Telegram-Init-Data': tg.initData
+  }
+});
             
             if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
             
