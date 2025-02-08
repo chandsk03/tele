@@ -109,7 +109,8 @@ const parseInitData = (req, res, next) => {
 const validateAndParseInitData = [validateInitData, parseInitData];
 
 // Updated auth endpoint
-app.post('/auth', validateAndParseInitData, async (req, res) => {
+// server.js
+app.post('/api/auth', validateAndParseInitData, async (req, res) => { // Changed to /api/auth
   try {
     const { id, first_name, last_name } = req.telegramUser;
     
