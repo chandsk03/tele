@@ -1,62 +1,65 @@
 const express = require('express');
 const mongoose = require('mongoose');
-const TelegramBot = require('node-telegram-bot-api');
 const crypto = require('crypto');
 const bodyParser = require('body-parser');
 const cors = require('cors');
 const { URLSearchParams } = require('url');
 const app = express();
 
-// Middleware
-app.use(cors());
+// Enhanced configuration
+app.use(cors({
+  origin: ['https://telegram.org', 'https://web.telegram.org'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  allowedHeaders: ['Content-Type', 'X-Telegram-Init-Data']
+}));
 app.use(bodyParser.json());
 require('dotenv').config();
 
-// MongoDB Connection
-mongoose.connect(process.env.MONGODB_URI, {
-  useNewUrlParser: true,
-  useUnifiedTopology: true
-})
-.then(() => console.log('Connected to MongoDB'))
-.catch(err => {
-  console.error('MongoDB Connection Error:', err.message);
-  process.exit(1);
-});
+// Database connection with retry
+const connectWithRetry = () => {
+  mongoose.connect(process.env.MONGODB_URI, {
+    useNewUrlParser: true,
+    useUnifiedTopology: true,
+    retryWrites: true
+  })
+  .then(() => console.log('MongoDB connected'))
+  .catch(err => {
+    console.error('MongoDB connection error:', err);
+    setTimeout(connectWithRetry, 5000);
+  });
+};
+connectWithRetry();
 
-// Schemas
+// Enhanced schemas
 const userSchema = new mongoose.Schema({
-  user_id: { type: Number, unique: true },
-  first_name: String,
+  user_id: { type: Number, required: true, unique: true, index: true },
+  first_name: { type: String, required: true },
   last_name: String,
+  created_at: { type: Date, default: Date.now }
 });
 
 const roomSchema = new mongoose.Schema({
-  room_id: { type: String, unique: true },
-  room_name: String,
-  created_by: Number,
-  members: [Number],
+  room_id: { type: String, required: true, unique: true, index: true },
+  room_name: { type: String, required: true, trim: true, minlength: 1 },
+  created_by: { type: Number, required: true, index: true },
+  members: [{ type: Number, index: true }],
+  created_at: { type: Date, default: Date.now }
 });
 
 const User = mongoose.model('User', userSchema);
 const Room = mongoose.model('Room', roomSchema);
 
-// Telegram Bot
-const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
-
-// Helpers
-const generateRoomId = () => crypto.randomBytes(8).toString('hex');
-
-// Telegram Validation Middleware
+// Improved Telegram validation middleware
 const validateInitData = (req, res, next) => {
-  try {
-    const initData = req.headers['x-telegram-init-data'];
-    if (!initData) return res.status(401).json({ error: 'Unauthorized' });
+  const initData = req.headers['x-telegram-init-data'];
+  if (!initData) return res.status(401).json({ error: 'Unauthorized' });
 
+  try {
     const params = new URLSearchParams(initData);
     const hash = params.get('hash');
     const dataCheckString = Array.from(params.entries())
       .filter(([key]) => key !== 'hash')
-      .sort(([a], [b]) => a.localeCompare(b))
+      .sort((a, b) => a[0].localeCompare(b[0]))
       .map(([key, value]) => `${key}=${value}`)
       .join('\n');
 
@@ -75,110 +78,99 @@ const validateInitData = (req, res, next) => {
     next();
   } catch (error) {
     console.error('Validation error:', error);
-    res.status(500).json({ error: 'Validation failed' });
+    res.status(400).json({ error: 'Invalid initData format' });
   }
 };
 
-// API Endpoints
+// Enhanced API endpoints
 
-// User Authentication
+// User authentication with error handling
 app.post('/auth', validateInitData, async (req, res) => {
   try {
+    const { user_id, first_name, last_name } = req.body;
+    if (!user_id || !first_name) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+
     const user = await User.findOneAndUpdate(
-      { user_id: req.body.user_id },
-      req.body,
-      { new: true, upsert: true }
+      { user_id },
+      { first_name, last_name },
+      { new: true, upsert: true, runValidators: true }
     );
+    
     res.json({ success: true, user });
   } catch (err) {
     console.error('Auth error:', err);
-    res.status(500).json({ error: 'Authentication failed' });
+    res.status(500).json({ error: 'Authentication failed', details: err.message });
   }
 });
 
-// Create Room
+// Room creation with validation
 app.post('/rooms', validateInitData, async (req, res) => {
   try {
-    const room = new Room({
-      room_id: generateRoomId(),
-      room_name: req.body.room_name,
-      created_by: req.body.user_id,
-      members: [req.body.user_id]
-    });
+    const { room_name, user_id } = req.body;
+    if (!room_name?.trim() || !user_id) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+
+    const session = await mongoose.startSession();
+    session.startTransaction();
     
-    await room.save();
-    res.json({ success: true, room });
+    try {
+      const user = await User.findById(user_id).session(session);
+      if (!user) throw new Error('User not found');
+
+      const room = new Room({
+        room_id: crypto.randomBytes(8).toString('hex'),
+        room_name: room_name.trim(),
+        created_by: user_id,
+        members: [user_id]
+      });
+
+      await room.save({ session });
+      await session.commitTransaction();
+      res.json({ success: true, room });
+    } catch (error) {
+      await session.abortTransaction();
+      throw error;
+    } finally {
+      session.endSession();
+    }
   } catch (err) {
     console.error('Create room error:', err);
-    res.status(500).json({ error: 'Room creation failed' });
+    res.status(500).json({ error: 'Room creation failed', details: err.message });
   }
 });
 
-// Get User Rooms
+// Get user rooms with pagination
 app.get('/rooms', validateInitData, async (req, res) => {
   try {
-    const rooms = await Room.find({ members: req.query.user_id });
+    const { user_id } = req.query;
+    if (!user_id) return res.status(400).json({ error: 'Missing user_id' });
+
+    const rooms = await Room.find({ members: user_id })
+      .sort({ created_at: -1 })
+      .lean();
+
     res.json({ success: true, rooms });
   } catch (err) {
     console.error('Get rooms error:', err);
-    res.status(500).json({ error: 'Failed to fetch rooms' });
+    res.status(500).json({ error: 'Failed to fetch rooms', details: err.message });
   }
 });
 
-// Join Room
-app.put('/rooms/:id/join', validateInitData, async (req, res) => {
-  try {
-    const room = await Room.findOneAndUpdate(
-      { room_id: req.params.id },
-      { $addToSet: { members: req.body.user_id } },
-      { new: true }
-    );
-
-    if (!room) return res.status(404).json({ error: 'Room not found' });
-    res.json({ success: true, room });
-  } catch (err) {
-    console.error('Join room error:', err);
-    res.status(500).json({ error: 'Failed to join room' });
-  }
-});
-
-// Exit Room
-app.put('/rooms/:id/exit', validateInitData, async (req, res) => {
-  try {
-    const room = await Room.findOneAndUpdate(
-      { room_id: req.params.id },
-      { $pull: { members: req.body.user_id } },
-      { new: true }
-    );
-
-    if (!room) return res.status(404).json({ error: 'Room not found' });
-    res.json({ success: true, room });
-  } catch (err) {
-    console.error('Exit room error:', err);
-    res.status(500).json({ error: 'Failed to exit room' });
-  }
-});
-
-// Delete Room
-app.delete('/rooms/:id', validateInitData, async (req, res) => {
-  try {
-    const room = await Room.findOne({ room_id: req.params.id });
-    
-    if (!room) return res.status(404).json({ error: 'Room not found' });
-    if (room.created_by !== req.body.user_id) {
-      return res.status(403).json({ error: 'Permission denied' });
-    }
-
-    await Room.deleteOne({ room_id: req.params.id });
-    res.json({ success: true });
-  } catch (err) {
-    console.error('Delete room error:', err);
-    res.status(500).json({ error: 'Failed to delete room' });
-  }
-});
-
-// Start Server
+// Start server with graceful shutdown
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
+});
+
+process.on('SIGTERM', () => {
+  console.info('SIGTERM signal received.');
+  server.close(() => {
+    mongoose.connection.close(false, () => {
+      console.log('MongoDB connection closed');
+      process.exit(0);
+    });
+  });
 });
