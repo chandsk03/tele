@@ -108,21 +108,50 @@ const parseInitData = (req, res, next) => {
 // Combined validation middleware
 const validateAndParseInitData = [validateInitData, parseInitData];
 
-// Updated auth endpoint
-// server.js
-app.post('/api/auth', validateAndParseInitData, async (req, res) => { // Changed to /api/auth
+// Auth endpoint
+app.post('/api/auth', async (req, res) => {
   try {
-    const { id, first_name, last_name } = req.telegramUser;
+    const initData = req.headers['x-telegram-init-data'];
     
+    // Validate initData
+    const params = new URLSearchParams(initData);
+    const hash = params.get('hash');
+    const dataCheckString = Array.from(params.entries())
+      .filter(([key]) => key !== 'hash')
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([key, value]) => `${key}=${value}`)
+      .join('\n');
+
+    const secretKey = crypto.createHmac('sha256', 'WebAppData')
+      .update(process.env.BOT_TOKEN)
+      .digest();
+    
+    const computedHash = crypto.createHmac('sha256', secretKey)
+      .update(dataCheckString)
+      .digest('hex');
+
+    if (computedHash !== hash) {
+      return res.status(401).json({ error: 'Invalid signature' });
+    }
+
+    // Extract user data
+    const userData = {
+      id: parseInt(params.get('user_id')),
+      first_name: params.get('user_first_name'),
+      last_name: params.get('user_last_name') || '',
+      username: params.get('user_username') || ''
+    };
+
+    // Create/update user
     const user = await User.findOneAndUpdate(
-      { user_id: id },
-      { first_name, last_name },
-      { new: true, upsert: true, runValidators: true }
+      { user_id: userData.id },
+      userData,
+      { new: true, upsert: true }
     );
-    
+
     res.json({ success: true, user });
-  } catch (err) {
-    console.error('Auth error:', err);
+  } catch (error) {
+    console.error('Auth error:', error);
     res.status(500).json({ error: 'Authentication failed' });
   }
 });
@@ -181,18 +210,12 @@ app.get('/rooms', validateInitData, async (req, res) => {
   }
 });
 
-// Start server with graceful shutdown
-const PORT = process.env.PORT || 3000;
-const server = app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+// Health check endpoint
+app.get('/api/health', (req, res) => {
+  res.status(200).json({ status: 'ok' });
 });
 
-process.on('SIGTERM', () => {
-  console.info('SIGTERM signal received.');
-  server.close(() => {
-    mongoose.connection.close(false, () => {
-      console.log('MongoDB connection closed');
-      process.exit(0);
-    });
-  });
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
 });
