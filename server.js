@@ -84,16 +84,37 @@ const validateInitData = (req, res, next) => {
 
 // Enhanced API endpoints
 
-// User authentication with error handling
-app.post('/auth', validateInitData, async (req, res) => {
-  try {
-    const { user_id, first_name, last_name } = req.body;
-    if (!user_id || !first_name) {
-      return res.status(400).json({ error: 'Missing required fields' });
-    }
+// Updated validation middleware to extract user data
+const parseInitData = (req, res, next) => {
+  const initData = req.headers['x-telegram-init-data'];
+  if (!initData) return res.status(401).json({ error: 'Unauthorized' });
 
+  try {
+    const params = new URLSearchParams(initData);
+    req.telegramUser = {
+      id: parseInt(params.get('user_id')),
+      first_name: params.get('user_first_name'),
+      last_name: params.get('user_last_name') || '',
+      username: params.get('user_username') || '',
+      language: params.get('user_language_code') || 'en'
+    };
+    next();
+  } catch (error) {
+    console.error('InitData parsing error:', error);
+    res.status(400).json({ error: 'Invalid initData format' });
+  }
+};
+
+// Combined validation middleware
+const validateAndParseInitData = [validateInitData, parseInitData];
+
+// Updated auth endpoint
+app.post('/auth', validateAndParseInitData, async (req, res) => {
+  try {
+    const { id, first_name, last_name } = req.telegramUser;
+    
     const user = await User.findOneAndUpdate(
-      { user_id },
+      { user_id: id },
       { first_name, last_name },
       { new: true, upsert: true, runValidators: true }
     );
@@ -101,7 +122,7 @@ app.post('/auth', validateInitData, async (req, res) => {
     res.json({ success: true, user });
   } catch (err) {
     console.error('Auth error:', err);
-    res.status(500).json({ error: 'Authentication failed', details: err.message });
+    res.status(500).json({ error: 'Authentication failed' });
   }
 });
 
