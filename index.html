@@ -125,31 +125,38 @@
         }
 
         // Authentication
-        async function authenticate() {
-            try {
-                const initData = tg.initData || '';
-                const response = await fetch('/auth', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'X-Telegram-Init-Data': initData
-                    },
-                    body: JSON.stringify({
-                        user_id: tg.initDataUnsafe?.user?.id,
-                        first_name: tg.initDataUnsafe?.user?.first_name,
-                        last_name: tg.initDataUnsafe?.user?.last_name || ''
-                    })
-                });
-                
-                if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-                
-                currentUser = await response.json();
-                loadRooms();
-            } catch (error) {
-                console.error('Authentication failed:', error);
-                tg.showAlert(error.message);
-            }
+    async function authenticate() {
+        try {
+            const response = await fetch('/auth', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Telegram-Init-Data': tg.initData
+                }
+            });
+            
+            if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+            
+            const { user } = await response.json();
+            currentUser = user;
+            tg.MainButton.setText(`Logged in as ${user.first_name}`).show();
+            loadRooms();
+        } catch (error) {
+            console.error('Authentication failed:', error);
+            tg.showAlert(error.message);
+            tg.close();
         }
+    }
+
+    // Initialize app with proper Telegram events
+    tg.ready();
+    tg.expand();
+    
+    if (tg.initDataUnsafe.user) {
+        authenticate();
+    } else {
+        tg.onEvent('viewportChanged', authenticate);
+    }
 
         // Room management
         async function loadRooms() {
