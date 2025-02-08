@@ -138,108 +138,108 @@
         }
 
         // Authentication
-        async function authenticate() {
-            try {
-                const response = await fetch('/api/auth', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'X-Telegram-Init-Data': tg.initData
-                    }
+   async function authenticate() {
+        try {
+            const response = await fetch('/api/auth', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Telegram-Init-Data': tg.initData
+                }
+            });
+            
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.error || `Authentication failed: ${response.status}`);
+            }
+            
+            const { user } = await response.json();
+            if (!user?.user_id) throw new Error('Invalid user data received');
+            
+            currentUser = user;
+            setupUI();
+        } catch (error) {
+            console.error('Authentication failed:', error);
+            showSafeAlert(error.message);
+            tg.close();
+        }
+    }
+
+    // New UI setup function
+    function setupUI() {
+        // Enable create button
+        document.querySelector('.tg-button').disabled = false;
+        
+        // Set up main button
+        if (tg.MainButton && tg.MainButton.setText) {
+            tg.MainButton.setText(`Logged in as ${currentUser.first_name}`).show();
+        }
+        
+        // Load rooms after successful auth
+        loadRooms();
+    }
+
+    // Modified createRoom function with null checks
+    async function createRoom() {
+        if (!currentUser?.user_id) {
+            showSafeAlert('Please wait while we complete authentication');
+            return;
+        }
+
+        const roomName = document.getElementById('roomName').value.trim();
+        if (!roomName) {
+            showSafeAlert('Room name cannot be empty');
+            return;
+        }
+
+        try {
+            const response = await fetch('/api/rooms', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Telegram-Init-Data': tg.initData
+                },
+                body: JSON.stringify({
+                    room_name: roomName,
+                    user_id: currentUser.user_id
+                })
+            });
+
+            const result = await response.json();
+            if (!response.ok) throw new Error(result.error || 'Failed to create room');
+            
+            loadRooms();
+            hideCreateModal();
+        } catch (error) {
+            console.error('Failed to create room:', error);
+            showSafeAlert(error.message);
+        }
+    }
+
+    // Modified initialization
+    function initApp() {
+        try {
+            // Disable create button initially
+            document.querySelector('.tg-button').disabled = true;
+            
+            tg.expand();
+            tg.ready();
+            
+            if (tg.initDataUnsafe?.user?.id) {
+                authenticate();
+            } else {
+                tg.onEvent('viewportChanged', () => {
+                    if (tg.initDataUnsafe?.user?.id) authenticate();
                 });
-                
-                if (!response.ok) {
-                    const error = await response.json();
-                    throw new Error(error.error || `HTTP error! status: ${response.status}`);
-                }
-                
-                const { user } = await response.json();
-                currentUser = user;
-                
-                // Safe main button setup
-                if (tg.MainButton && tg.MainButton.setText) {
-                    tg.MainButton.setText(`Logged in as ${user.first_name}`).show();
-                }
-                
-                loadRooms();
-            } catch (error) {
-                console.error('Authentication failed:', error);
-                showSafeAlert(error.message);
             }
+        } catch (error) {
+            console.error('Initialization error:', error);
+            showSafeAlert('Initialization failed. Please reopen the app.');
         }
+    }
 
-        // Room management
-        async function loadRooms() {
-            try {
-                const response = await fetch(`/api/rooms?user_id=${currentUser.user_id}`, {
-                    headers: { 'X-Telegram-Init-Data': tg.initData }
-                });
-                
-                if (!response.ok) {
-                    const error = await response.json();
-                    throw new Error(error.error || 'Failed to load rooms');
-                }
-                
-                const { rooms } = await response.json();
-                renderRooms(rooms);
-            } catch (error) {
-                console.error('Failed to load rooms:', error);
-                showSafeAlert(error.message);
-            }
-        }
-
-        async function createRoom() {
-            const roomName = document.getElementById('roomName').value.trim();
-            if (!roomName) {
-                showSafeAlert('Room name cannot be empty');
-                return;
-            }
-
-            try {
-                const response = await fetch('/api/rooms', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'X-Telegram-Init-Data': tg.initData
-                    },
-                    body: JSON.stringify({
-                        room_name: roomName,
-                        user_id: currentUser.user_id
-                    })
-                });
-
-                const result = await response.json();
-                if (!response.ok) throw new Error(result.error || 'Failed to create room');
-                
-                loadRooms();
-                hideCreateModal();
-            } catch (error) {
-                console.error('Failed to create room:', error);
-                showSafeAlert(error.message);
-            }
-        }
-
-        // Initialize app
-        function initApp() {
-            try {
-                tg.expand();
-                tg.ready();
-                
-                if (tg.initDataUnsafe?.user?.id) {
-                    authenticate();
-                } else {
-                    tg.onEvent('viewportChanged', () => {
-                        if (tg.initDataUnsafe?.user?.id) authenticate();
-                    });
-                }
-            } catch (error) {
-                console.error('Initialization error:', error);
-                showSafeAlert('Initialization failed. Please reopen the app.');
-            }
-        }
-
-        // Start the application
-        initApp();
-    </script>
+    // Start the application
+    initApp();
+</script>
 </body>
 </html>
