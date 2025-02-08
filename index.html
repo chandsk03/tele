@@ -24,6 +24,20 @@
             margin: 0 auto;
         }
 
+        .room-list {
+            margin: 20px 0;
+        }
+
+        .room-item {
+            padding: 10px;
+            margin: 10px 0;
+            background: var(--tg-theme-secondary-bg-color);
+            border-radius: 8px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
         .modal {
             display: none;
             position: fixed;
@@ -34,54 +48,100 @@
             padding: 20px;
             border-radius: 12px;
             box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            z-index: 1000;
+        }
+
+        .modal.visible {
+            display: block;
+        }
+
+        .input-group {
+            margin: 10px 0;
+        }
+
+        input {
+            width: 100%;
+            padding: 8px;
+            margin: 5px 0;
+            border: 1px solid var(--tg-theme-hint-color);
+            border-radius: 4px;
+            background: var(--tg-theme-bg-color);
+            color: var(--tg-theme-text-color);
         }
     </style>
 </head>
 <body>
     <div class="container">
         <h2>Chat Rooms</h2>
-        <div id="roomsList"></div>
-        <button onclick="showCreateModal()">Create New Room</button>
+        <div class="room-list" id="roomsList"></div>
+        <button class="tg-button" onclick="showCreateModal()">Create New Room</button>
     </div>
 
     <div id="createModal" class="modal">
-        <input type="text" id="roomName" placeholder="Room name">
-        <button onclick="createRoom()">Create</button>
-        <button onclick="hideCreateModal()">Cancel</button>
+        <div class="input-group">
+            <input type="text" id="roomName" placeholder="Room name" required>
+        </div>
+        <button class="tg-button" onclick="createRoom()">Create</button>
+        <button class="tg-button" onclick="hideCreateModal()">Cancel</button>
     </div>
 
     <script>
-        const tg = Telegram.WebApp;
+        const tg = window.Telegram?.WebApp;
+        if (!tg) {
+            document.body.innerHTML = '<h1>Please open in Telegram</h1>';
+            throw new Error('Telegram Web App not detected');
+        }
+
         let currentUser = null;
 
         // Modal functions
         function showCreateModal() {
-            document.getElementById('createModal').style.display = 'block';
+            document.getElementById('createModal').classList.add('visible');
         }
 
         function hideCreateModal() {
-            document.getElementById('createModal').style.display = 'none';
+            document.getElementById('createModal').classList.remove('visible');
+            document.getElementById('roomName').value = '';
+        }
+
+        // Room rendering
+        function renderRooms(rooms) {
+            const container = document.getElementById('roomsList');
+            container.innerHTML = '';
+            
+            rooms.forEach(room => {
+                const div = document.createElement('div');
+                div.className = 'room-item';
+                div.innerHTML = `
+                    <span>${room.room_name}</span>
+                    <div>
+                        <button onclick="handleJoinRoom('${room.room_id}')">Join</button>
+                        ${room.created_by === currentUser.user_id ? 
+                          `<button onclick="deleteRoom('${room.room_id}')">Delete</button>` : ''}
+                    </div>
+                `;
+                container.appendChild(div);
+            });
         }
 
         // Authentication
         async function authenticate() {
             try {
+                const initData = tg.initData || '';
                 const response = await fetch('/auth', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
-                        'X-Telegram-Init-Data': tg.initData
+                        'X-Telegram-Init-Data': initData
                     },
                     body: JSON.stringify({
-                        user_id: tg.initDataUnsafe.user.id,
-                        first_name: tg.initDataUnsafe.user.first_name,
-                        last_name: tg.initDataUnsafe.user.last_name || ''
+                        user_id: tg.initDataUnsafe?.user?.id,
+                        first_name: tg.initDataUnsafe?.user?.first_name,
+                        last_name: tg.initDataUnsafe?.user?.last_name || ''
                     })
                 });
                 
-                if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
-                }
+                if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
                 
                 currentUser = await response.json();
                 loadRooms();
@@ -91,7 +151,7 @@
             }
         }
 
-        // Room management functions
+        // Room management
         async function loadRooms() {
             try {
                 const response = await fetch(`/rooms?user_id=${currentUser.user_id}`, {
@@ -100,7 +160,7 @@
                 
                 if (!response.ok) throw new Error('Failed to load rooms');
                 
-                const rooms = await response.json();
+                const { rooms } = await response.json();
                 renderRooms(rooms);
             } catch (error) {
                 console.error('Failed to load rooms:', error);
@@ -109,7 +169,12 @@
         }
 
         async function createRoom() {
-            const roomName = document.getElementById('roomName').value;
+            const roomName = document.getElementById('roomName').value.trim();
+            if (!roomName) {
+                tg.showAlert('Room name cannot be empty');
+                return;
+            }
+
             try {
                 const response = await fetch('/rooms', {
                     method: 'POST',
@@ -123,16 +188,14 @@
                     })
                 });
 
-                if (!response.ok) throw new Error('Failed to create room');
-                
                 const result = await response.json();
-                if (result.success) {
-                    loadRooms();
-                    hideCreateModal();
-                }
+                if (!response.ok) throw new Error(result.error || 'Failed to create room');
+                
+                loadRooms();
+                hideCreateModal();
             } catch (error) {
                 console.error('Failed to create room:', error);
-                tg.showAlert('Failed to create room');
+                tg.showAlert(error.message);
             }
         }
 
