@@ -138,7 +138,7 @@
         }
 
         // Authentication
-   async function authenticate() {
+    async function authenticate() {
         try {
             const response = await fetch('/api/auth', {
                 method: 'POST',
@@ -147,20 +147,24 @@
                     'X-Telegram-Init-Data': tg.initData
                 }
             });
-            
+
             if (!response.ok) {
-                const error = await response.json();
-                throw new Error(error.error || `Authentication failed: ${response.status}`);
+                const errorData = await response.json();
+                throw new Error(errorData.error || `Authentication failed (${response.status})`);
             }
-            
+
             const { user } = await response.json();
-            if (!user?.user_id) throw new Error('Invalid user data received');
             
+            // Validate user data structure
+            if (!user?.user_id || typeof user.user_id !== 'number') {
+                throw new Error('Invalid user data received from server');
+            }
+
             currentUser = user;
             setupUI();
         } catch (error) {
-            console.error('Authentication failed:', error);
-            showSafeAlert(error.message);
+            console.error('Authentication error:', error);
+            showSafeAlert(`Authentication failed: ${error.message}`);
             tg.close();
         }
     }
@@ -182,13 +186,25 @@
     // Modified createRoom function with null checks
     async function createRoom() {
         if (!currentUser?.user_id) {
-            showSafeAlert('Please wait while we complete authentication');
+            showSafeAlert('Authentication not completed. Please try again later.');
             return;
         }
 
-        const roomName = document.getElementById('roomName').value.trim();
+        const roomNameInput = document.getElementById('roomName');
+        const roomName = roomNameInput.value.trim();
+
+        // Enhanced validation pattern
+        const roomNamePattern = /^[a-zA-Z0-9\s\-_]{3,30}$/;
+        
         if (!roomName) {
             showSafeAlert('Room name cannot be empty');
+            roomNameInput.focus();
+            return;
+        }
+
+        if (!roomNamePattern.test(roomName)) {
+            showSafeAlert('Invalid room name. Use 3-30 characters (letters, numbers, spaces, -, _)');
+            roomNameInput.focus();
             return;
         }
 
@@ -201,17 +217,20 @@
                 },
                 body: JSON.stringify({
                     room_name: roomName,
-                    user_id: currentUser.user_id
+                    user_id: currentUser.user_id.toString() // Ensure string format
                 })
             });
 
             const result = await response.json();
-            if (!response.ok) throw new Error(result.error || 'Failed to create room');
             
+            if (!response.ok) {
+                throw new Error(result.error || `Server error: ${response.status}`);
+            }
+
             loadRooms();
             hideCreateModal();
         } catch (error) {
-            console.error('Failed to create room:', error);
+            console.error('Room creation failed:', error);
             showSafeAlert(error.message);
         }
     }
