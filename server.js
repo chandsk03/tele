@@ -157,40 +157,57 @@ app.post('/api/auth', async (req, res) => {
 });
 
 // Room creation with validation
-app.post('/rooms', validateInitData, async (req, res) => {
-  try {
-    const { room_name, user_id } = req.body;
-    if (!room_name?.trim() || !user_id) {
-      return res.status(400).json({ error: 'Missing required fields' });
-    }
-
-    const session = await mongoose.startSession();
-    session.startTransaction();
-    
+app.post('/api/rooms', validateInitData, async (req, res) => {
     try {
-      const user = await User.findById(user_id).session(session);
-      if (!user) throw new Error('User not found');
+        const { room_name, user_id } = req.body;
+        
+        // Validate input format
+        if (!room_name?.match(/^[a-zA-Z0-9\s\-_]{3,30}$/)) {
+            return res.status(400).json({
+                error: 'Invalid room name format. Use 3-30 characters (letters, numbers, spaces, -, _)'
+            });
+        }
 
-      const room = new Room({
-        room_id: crypto.randomBytes(8).toString('hex'),
-        room_name: room_name.trim(),
-        created_by: user_id,
-        members: [user_id]
-      });
+        if (!Number.isInteger(Number(user_id))) {
+            return res.status(400).json({ error: 'Invalid user ID format' });
+        }
 
-      await room.save({ session });
-      await session.commitTransaction();
-      res.json({ success: true, room });
-    } catch (error) {
-      await session.abortTransaction();
-      throw error;
-    } finally {
-      session.endSession();
+        const session = await mongoose.startSession();
+        session.startTransaction();
+        
+        try {
+            const room = new Room({
+                room_id: crypto.randomBytes(8).toString('hex'),
+                room_name: room_name.trim(),
+                created_by: Number(user_id),
+                members: [Number(user_id)]
+            });
+
+            await room.save({ session });
+            await session.commitTransaction();
+            
+            res.json({ 
+                success: true, 
+                room: {
+                    room_id: room.room_id,
+                    room_name: room.room_name,
+                    created_by: room.created_by,
+                    created_at: room.created_at
+                }
+            });
+        } catch (error) {
+            await session.abortTransaction();
+            throw error;
+        } finally {
+            session.endSession();
+        }
+    } catch (err) {
+        console.error('Room creation error:', err);
+        res.status(500).json({ 
+            error: 'Room creation failed',
+            details: err.message
+        });
     }
-  } catch (err) {
-    console.error('Create room error:', err);
-    res.status(500).json({ error: 'Room creation failed', details: err.message });
-  }
 });
 
 // Get user rooms with pagination
